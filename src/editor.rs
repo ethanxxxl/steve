@@ -1,85 +1,24 @@
+use std::{collections::HashMap, rc::Rc};
 use std::fmt;
 
-pub struct Buffer {
-    /// lines : columns
-    data: Vec<Vec<char>>,
-    cursor_pos: (usize, usize),
-    file_path: Option<String>,
-    id: u32,
-}
+mod graphics;
+mod keymaps;
+mod highlighter;
+mod buffer;
+mod fonts;
 
-impl Buffer {
-    pub fn new() -> Self {
-        Self {
-            data: vec![vec![]],
-            cursor_pos: (1, 0),
-            file_path: None,
-            id: 0,
-        }
-    }
+use buffer::Buffer;
+use fonts::{Font, FontDefinition};
 
-    /// inserts `text` at the position of the cursor
-    pub fn insert(&mut self, text: String) {
-        // cursor_pos holds a line number and column index. lines start at 1.
-        let (mut line_index, mut column_index) = self.cursor_pos;
-        line_index -= 1;
+use keymaps::*;
 
-        for t in text.chars() {
-        match t {
-            '\n' | '\r' => {
-                self.data[line_index].insert(column_index, '\n');
-                column_index += 1;
-
-                let newline = self.data[line_index].split_off(column_index);
-                self.data.insert(line_index+1, newline);
-                column_index = 0;
-                line_index += 1;
-            }
-
-            '\x08' => {
-                if self.data[line_index].is_empty() && self.data.len() > 1 {
-                    self.data.remove(line_index);
-                    line_index -= 1;
-                    self.data[line_index].pop(); // remove trailing newline
-                    column_index = self.data[line_index].len();
-                } else if self.data[line_index].is_empty() {
-                    // we are on the first line. and its empty.
-                    // do nothing.
-                } else {
-                    self.data[line_index].remove(column_index-1);
-                    column_index -= 1;
-                }
-            }
-
-            _ => {
-                self.data[line_index].insert(column_index, t);
-                column_index += 1;
-            }
-        }}
-
-        self.cursor_pos = (line_index+1, column_index);
-    }
-
-    pub fn flatten(&self) -> String {
-        self.data
-            .iter()
-            .flatten()
-            .collect::<String>()
-    }
-}
-
-/// Pressing the leader key initiates a *sequence*. a sequence of keys
-///  may be mapped to complete an action. This is not available in insert mode.
-///
-///  Movement commands are not preceded by the leader key.
-struct Keymap {
-    leader: char,
-}
-
+/// This will need to be changed to handle L/R in the future.
+#[derive(Clone, Copy)]
 pub enum EditMode {
     Normal,
     Insert,
     Visual,
+    Command,
 }
 
 impl fmt::Display for EditMode {
@@ -88,69 +27,148 @@ impl fmt::Display for EditMode {
             Self::Normal => write!(formatter, "NORMAL"),
             Self::Insert => write!(formatter, "INSERT"),
             Self::Visual => write!(formatter, "VISUAL"),
+            Self::Command => write!(formatter, "COMMAND"),
         }
     }
 }
 
 pub struct EditorState {
+    pub theme: HashMap<Font, FontDefinition>,
+    buffers: Vec<Box<Buffer>>,
+    normal_chain: Rc<Chain>,
+    visual_chain: Rc<Chain>,
+    insert_chain: Rc<Chain>,
+
+    next_id: u32,
     pub active_buffer: Box<Buffer>,
     pub mode: EditMode,
     pub status_line: String,
-    buffers: Vec<Box<Buffer>>,
-    next_id: u32,
+
+    cur_subchain: Rc<Chain>,
 }
+
+// The problem with this whole approach is that you have this EditorState struct, which is trying to manipulate itself.
 
 impl EditorState {
     pub fn new() -> Self {
+        let mut theme = HashMap::new();
+        theme.insert(Font::Normal, FontDefinition::default());
+
+        let normal_chain = Rc::new(Chain::new());
+        let insert_chain = Rc::new(Chain::new());
+        let visual_chain = Rc::new(Chain::new());
+
+        (*normal_chain).insert('i'.into(), (|s: &mut Self| s.set_insert_mode()).into());
+        (*insert_chain).insert('\x1b'.into(), (|s: &mut Self| s.set_normal_mode()).into());
+
         Self {
-            active_buffer: Box::new(Buffer::new()),
-            mode: EditMode::Insert,
+            normal_chain,
+            insert_chain,
+            visual_chain,
             buffers: Vec::new(),
+            active_buffer: Box::new(Buffer::new(0)),
+            mode: EditMode::Normal,
             next_id: 1,
+            theme,
             status_line: String::new(),
+
+            cur_subchain: normal_chain,
         }
     }
+
+    /// takes a keystroke, processes it, and alters state according to internal state and
+    /// the keystroke.
+    pub fn process_keystroke(&mut self, key: char) {
+        match self.mode {
+            EditMode::Normal => {
+                self.validate_chain(key.into(), self.normal_chain);
+            }
+            EditMode::Insert => {
+                if !self.validate_chain(key.into(), self.insert_chain) {
+                    self.active_buffer.insert_at_cursor(key);
+                }
+            }
+            EditMode::Visual => {}
+            EditMode::Command => {}
+        }
+    }
+
+    // returns true if key was a valid input for chain.
+    fn validate_chain(&mut self, key: KeyPress, root_chain: Rc<Chain>) -> bool {
+        if let Some(entry) = self.cur_subchain.get(&key) {
+            match entry {
+                ChainLink::Func(func) => {
+                    (*func)(self);
+                    self.cur_subchain = root_chain.clone();
+                },
+                ChainLink::SubChain(subchain) => self.cur_subchain = (*subchain).clone()
+            };
+
+            true
+        } else {
+            false
+        }
+    }
+
     /// Creates a new empty buffer and returns its ID
     pub fn create_empty_buffer(&mut self) -> u32 {
-        let mut new_buffer = Buffer::new();
-        new_buffer.id = self.next_id;
+        let new_buffer = Buffer::new(self.next_id);
         self.next_id += 1;
 
         let new_buffer = Box::new(new_buffer);
         self.buffers.push(new_buffer);
-        self.buffers.sort_by_key(|buf| buf.id );
+        self.buffers.sort_by_key(|buf| buf.get_id());
 
         self.next_id - 1
     }
 
     pub fn change_buffer(&mut self, buffer_id: u32) -> Result<(), String> {
-        self.buffers.sort_by_key(|buf| buf.id);
+        self.buffers.sort_by_key(|buf| buf.get_id());
 
-        let index = self.buffers.binary_search_by_key(&buffer_id, |buf| buf.id);
+        let index = self
+            .buffers
+            .binary_search_by_key(&buffer_id, |buf| buf.get_id());
         match index {
             Err(_) => {
                 let msg = format!("buffer with id {} does not exist.", buffer_id);
                 Err(msg.to_string())
-            },
+            }
             Ok(i) => {
                 std::mem::swap(&mut self.active_buffer, &mut self.buffers[i]);
                 Ok(())
-            },
+            }
         }
     }
 
     pub fn get_buffer_list(&mut self) -> Vec<(u32, Option<String>)> {
         self.buffers
             .iter()
-            .map(|buffer| {
-                (buffer.id, buffer.file_path.clone())
-            })
+            .map(|buffer| (buffer.get_id(), None))
             .collect()
     }
 
+    pub fn set_mode(&mut self, new_mode: EditMode) {
+        self.mode = new_mode
+    }
+    pub fn set_insert_mode(&mut self) {
+        self.mode = EditMode::Insert
+    }
+    pub fn set_normal_mode(&mut self) {
+        self.mode = EditMode::Normal
+    }
+    pub fn set_visual_mode(&mut self) {
+        self.mode = EditMode::Visual
+    }
+    pub fn set_command_mode(&mut self) {
+        self.mode = EditMode::Command
+    }
+
+    pub fn get_mode(&mut self) -> EditMode {
+        self.mode
+    }
+
     pub fn update(&mut self) {
-        let (line, col) = self.active_buffer.cursor_pos;
-        self.status_line =
-            format!("[{}] [{}:{}]", self.mode, line, col);
+        let (line, col) = self.active_buffer.get_cursor_pos();
+        self.status_line = format!("[{}] [{}:{}]", self.mode, line, col);
     }
 }

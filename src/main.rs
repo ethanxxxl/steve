@@ -1,17 +1,15 @@
-use std::collections::HashMap;
-
+use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 use winit::{
+    dpi::PhysicalSize,
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
-    dpi::PhysicalSize
 };
-use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 
-use pixels::{SurfaceTexture, PixelsBuilder};
+use pixels::{PixelsBuilder, SurfaceTexture};
 
 mod editor;
-use editor::*;
+use editor::EditorState;
 
 fn main() {
     env_logger::init();
@@ -31,35 +29,32 @@ fn main() {
 
     let context = pixels.context();
 
-    let ubuntu = ab_glyph::FontArc::try_from_slice(include_bytes!(
-        "/usr/share/fonts/TTF/FiraCode-Regular.ttf"
-        //"/usr/share/fonts/ubuntu/Ubuntu-R.ttf"
-    )).expect("Error Loading Font");
+    let bookerly = ab_glyph::FontArc::try_from_slice(include_bytes!(
+        "/usr/share/fonts/TTF/Bookerly-Regular.ttf"
+    ))
+    .expect("Error Loading Font");
 
-    let mut glyph_brush = GlyphBrushBuilder::using_font(ubuntu)
+    let fira_code = ab_glyph::FontArc::try_from_slice(include_bytes!(
+        "/usr/share/fonts/TTF/FiraCode-Regular.ttf"
+    ))
+    .expect("Error Loading Font");
+
+    let mut glyph_brush = GlyphBrushBuilder::using_fonts(vec![bookerly, fira_code])
         .build(&context.device, context.texture_format);
 
     let mut editor_state = EditorState::new();
 
     event_loop.run(move |event, _, control_flow| match event {
         Event::WindowEvent {
-            event,// this was `ref event` for some reason...
+            event, // this was `ref event` for some reason...
             window_id,
         } if window_id == window.id() => match event {
             WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-            WindowEvent::KeyboardInput { input, .. } => match input {
-                KeyboardInput {
-                    state: ElementState::Pressed,
-                    virtual_keycode: Some(VirtualKeyCode::Escape),
-                    ..
-                } => *control_flow = ControlFlow::Exit,
-                _ => {}
-            },
-            WindowEvent::ReceivedCharacter(character) =>{
-                editor_state.active_buffer.insert(character.to_string());
+            WindowEvent::ReceivedCharacter(character) => {
+                editor_state.process_keystroke(character);
                 window.request_redraw();
-            },
-            WindowEvent::Resized(PhysicalSize { width, height } ) => {
+            }
+            WindowEvent::Resized(PhysicalSize { width, height }) => {
                 pixels.resize_buffer(width, height);
                 pixels.resize_surface(width, height);
                 window.request_redraw();
@@ -74,50 +69,52 @@ fn main() {
             let PhysicalSize { width, height } = window.inner_size();
             editor_state.update();
 
-            let text = editor_state.active_buffer.flatten();
-            let text = Text::new(text.as_str())
-                .with_scale(20.0)
-                .with_color([1.0, 1.0, 1.0, 1.0]);
-
-            glyph_brush.queue(Section {
-                screen_position: (0.0, 0.0),
-                bounds: (width as f32, 0.5*height as f32),
-                text: vec![text],
-                ..Section::default()
-            });
-
+            use wgpu_glyph::FontId;
             let status_text = Text::new(editor_state.status_line.as_str())
                 .with_scale(20.0)
-                .with_color([1.0, 1.0, 1.0, 1.0]);
+                .with_color([1.0, 1.0, 1.0, 1.0])
+                .with_font_id(FontId(1));
 
             glyph_brush.queue(Section {
-                screen_position: (0.0, height as f32-20.0),
+                screen_position: (0.0, height as f32 - 20.0),
                 bounds: (width as f32, 25.0),
                 text: vec![status_text],
                 ..Section::default()
             });
 
-            pixels.render_with(|encoder, render_target, context| {
-                context.scaling_renderer.render(encoder, render_target);
+            let display_buffer = editor_state.get_display_buffer();
 
-                glyph_brush.draw_queued(
-                    &context.device,
-                    &mut staging_belt,
-                    encoder,
-                    render_target,
-                    width,
-                    height,
-                ).expect("Draw queued");
+            glyph_brush.queue(Section {
+                screen_position: (0.0, 0.0),
+                bounds: (width as f32, height as f32),
+                text: editor_state.get_section_text(&display_buffer),
+                ..Default::default()
+            });
 
-                staging_belt.finish();
-            }).unwrap();
+            pixels
+                .render_with(|encoder, render_target, context| {
+                    context.scaling_renderer.render(encoder, render_target);
+
+                    glyph_brush
+                        .draw_queued(
+                            &context.device,
+                            &mut staging_belt,
+                            encoder,
+                            render_target,
+                            width,
+                            height,
+                        )
+                        .expect("Draw queued");
+
+                    staging_belt.finish();
+                })
+                .unwrap();
 
             use futures::task::SpawnExt;
-                local_spawner
-                    .spawn(staging_belt.recall())
-                    .expect("Recall staging belt");
-
-        },
+            local_spawner
+                .spawn(staging_belt.recall())
+                .expect("Recall staging belt");
+        }
 
         Event::MainEventsCleared => {
             //window.request_redraw();
