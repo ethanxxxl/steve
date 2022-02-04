@@ -6,10 +6,41 @@ use winit::{
     window::WindowBuilder,
 };
 
+use std::rc::Rc;
+
 use pixels::{PixelsBuilder, SurfaceTexture};
 
 mod editor;
 use editor::EditorState;
+
+// when do we do things?
+// during the event loop.
+// what does the event loop need?
+// static ownership of everything that it captures.
+// solutions?
+//  - everything to do with anything gets moved inside of the event loop
+//  - somehow segregate anything to do with the event handler from the editor logic.
+//    + separate threads?
+//
+// what exactly do you want to do?
+// you want to store a plain reference to a Chain, and another reference to to sub chains in that chain.
+//  - these chains will need to be mutable.
+//  - because of this, you probably shouldn't actually store these as references.
+//  - how do you know what the current active subchain is then?
+//  - you can't use a reference if the struct owns the chain (the reason this is a problem in the first place)
+//  - you can't clone the subchain, because of the Boxed values
+//
+//  - what should EditorState functions be able to do?
+//  - modify Chains?
+//  - modify the buffer?
+//  - modify anything?
+//  - Editor Struct, which holds editor variables, keymaps, etc.
+//  - EditorState holds references to the keymaps held in the Editor struct.
+//  - ^ this doesn't work, would have to pass the lifetime up, and since the keympas are mut, the references would be garbage
+//
+//  - when traversing down a keymap, you pop each subchain, store the parent in a vector. when you reach the end of a chain, you just go back through
+//    the vector, and add everything back where it should go.
+//
 
 fn main() {
     env_logger::init();
@@ -30,21 +61,22 @@ fn main() {
     let context = pixels.context();
 
     let bookerly = ab_glyph::FontArc::try_from_slice(include_bytes!(
-        "/usr/share/fonts/TTF/Bookerly-Regular.ttf"
+        "/System/Library/Fonts/Menlo.ttc"
     ))
     .expect("Error Loading Font");
 
     let fira_code = ab_glyph::FontArc::try_from_slice(include_bytes!(
-        "/usr/share/fonts/TTF/FiraCode-Regular.ttf"
+        "/System/Library/Fonts/Helvetica.ttc"
     ))
     .expect("Error Loading Font");
 
     let mut glyph_brush = GlyphBrushBuilder::using_fonts(vec![bookerly, fira_code])
         .build(&context.device, context.texture_format);
 
+
     let mut editor_state = EditorState::new();
 
-    event_loop.run(move |event, _, control_flow| match event {
+    event_loop.run(move |event, _, control_flow| { match event {
         Event::WindowEvent {
             event, // this was `ref event` for some reason...
             window_id,
@@ -62,9 +94,10 @@ fn main() {
             _ => {}
         },
         Event::RedrawRequested(_) => {
-            pixels.get_frame().chunks_mut(4).for_each(|p| {
+            fn pixel_buffer_thing(p: &mut [u8]) {
                 p.copy_from_slice(&[0, 0, 0, 255]);
-            });
+            }
+            pixels.get_frame().chunks_mut(4).for_each(pixel_buffer_thing);
 
             let PhysicalSize { width, height } = window.inner_size();
             editor_state.update();
@@ -122,5 +155,5 @@ fn main() {
         _ => {
             *control_flow = winit::event_loop::ControlFlow::Wait;
         }
-    });
+    }});
 }

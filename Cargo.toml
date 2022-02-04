@@ -14,7 +14,3 @@ wgpu = "0.9"
 pollster = "0.2"
 pixels = "0.5.0"
 futures = "0.3"
-
-[dependencies.pyo3]
-version = "0.14.2"
-features = ["auto-initialize"]

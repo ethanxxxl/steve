@@ -109,7 +109,7 @@ impl PartialEq for KeyPress {
 pub type Chain = HashMap<KeyPress, ChainLink>;
 
 pub enum ChainLink {
-    SubChain(Rc<Chain>),
+    SubChain(Chain),
     Func(Box<dyn Fn(&mut EditorState)>),
 }
 

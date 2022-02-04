@@ -2,9 +2,9 @@ use std::{collections::HashMap, rc::Rc};
 use std::fmt;
 
 mod graphics;
-mod keymaps;
+pub mod keymaps;
 mod highlighter;
-mod buffer;
+pub mod buffer;
 mod fonts;
 
 use buffer::Buffer;
@@ -34,57 +34,57 @@ impl fmt::Display for EditMode {
 
 pub struct EditorState {
     pub theme: HashMap<Font, FontDefinition>,
-    buffers: Vec<Box<Buffer>>,
-    normal_chain: Rc<Chain>,
-    visual_chain: Rc<Chain>,
-    insert_chain: Rc<Chain>,
+    pub normal_chain: Vec<(KeyPress, Chain)>,
+    pub visual_chain: Vec<(KeyPress, Chain)>,
+    pub insert_chain: Vec<(KeyPress, Chain)>,
 
-    next_id: u32,
-    pub active_buffer: Box<Buffer>,
+    pub next_id: u32,
+    pub active_buffer: Buffer,
     pub mode: EditMode,
     pub status_line: String,
-
-    cur_subchain: Rc<Chain>,
 }
 
 // The problem with this whole approach is that you have this EditorState struct, which is trying to manipulate itself.
 
 impl EditorState {
     pub fn new() -> Self {
-        let mut theme = HashMap::new();
-        theme.insert(Font::Normal, FontDefinition::default());
+        let mut default_buffer = Buffer::new(0);
+        let mut normal_chain = Chain::new();
+        let mut insert_chain = Chain::new();
+        let mut visual_chain = Chain::new();
 
-        let normal_chain = Rc::new(Chain::new());
-        let insert_chain = Rc::new(Chain::new());
-        let visual_chain = Rc::new(Chain::new());
+        normal_chain.insert('i'.into(), (|s: &mut EditorState| s.set_insert_mode()).into());
+        insert_chain.insert('\x1b'.into(), (|s: &mut EditorState| s.set_normal_mode()).into());
 
-        (*normal_chain).insert('i'.into(), (|s: &mut Self| s.set_insert_mode()).into());
-        (*insert_chain).insert('\x1b'.into(), (|s: &mut Self| s.set_normal_mode()).into());
 
-        Self {
-            normal_chain,
-            insert_chain,
-            visual_chain,
-            buffers: Vec::new(),
-            active_buffer: Box::new(Buffer::new(0)),
-            mode: EditMode::Normal,
-            next_id: 1,
+        let mut theme: HashMap<Font, FontDefinition> = HashMap::new();
+
+        theme.insert(Font::Normal, Default::default());
+
+        EditorState {
             theme,
+            normal_chain: vec![(' '.into(), normal_chain)],
+            visual_chain: vec![(' '.into(), visual_chain)],
+            insert_chain: vec![(' '.into(), insert_chain)],
+            next_id: 1,
+            active_buffer: Buffer::new(0),
+            mode: EditMode::Normal,
             status_line: String::new(),
-
-            cur_subchain: normal_chain,
         }
     }
-
     /// takes a keystroke, processes it, and alters state according to internal state and
     /// the keystroke.
     pub fn process_keystroke(&mut self, key: char) {
         match self.mode {
             EditMode::Normal => {
-                self.validate_chain(key.into(), self.normal_chain);
+                if let Some(func) = Self::validate_chain(key.into(), &mut self.normal_chain) {
+                    (*func)(self);
+                }
             }
             EditMode::Insert => {
-                if !self.validate_chain(key.into(), self.insert_chain) {
+                if let Some(func) = Self::validate_chain(key.into(), &mut self.insert_chain) {
+                    (*func)(self);
+                } else {
                     self.active_buffer.insert_at_cursor(key);
                 }
             }
@@ -94,57 +94,29 @@ impl EditorState {
     }
 
     // returns true if key was a valid input for chain.
-    fn validate_chain(&mut self, key: KeyPress, root_chain: Rc<Chain>) -> bool {
-        if let Some(entry) = self.cur_subchain.get(&key) {
+    fn validate_chain(key: KeyPress, chain: &mut Vec<(KeyPress, Chain)>)
+                      -> Option<Box<dyn Fn(&mut EditorState)>> {
+        let end = chain.len()-1;
+        if let Some((key, entry)) = chain[end].1.remove_entry(&key) {
             match entry {
                 ChainLink::Func(func) => {
-                    (*func)(self);
-                    self.cur_subchain = root_chain.clone();
+                    // fold the chain back into the root.
+                    for i in (1..=end).rev() {
+                        let subchain = chain.pop().expect("premature end of chain");
+                        chain[i-1].1.insert(subchain.0, ChainLink::SubChain(subchain.1));
+                    }
+
+                    Some(func)
                 },
-                ChainLink::SubChain(subchain) => self.cur_subchain = (*subchain).clone()
-            };
-
-            true
+                // not a function, so add this layer to the vector.
+                ChainLink::SubChain(subchain) => {
+                    chain.push((key, subchain));
+                    None
+                },
+            }
         } else {
-            false
+            None
         }
-    }
-
-    /// Creates a new empty buffer and returns its ID
-    pub fn create_empty_buffer(&mut self) -> u32 {
-        let new_buffer = Buffer::new(self.next_id);
-        self.next_id += 1;
-
-        let new_buffer = Box::new(new_buffer);
-        self.buffers.push(new_buffer);
-        self.buffers.sort_by_key(|buf| buf.get_id());
-
-        self.next_id - 1
-    }
-
-    pub fn change_buffer(&mut self, buffer_id: u32) -> Result<(), String> {
-        self.buffers.sort_by_key(|buf| buf.get_id());
-
-        let index = self
-            .buffers
-            .binary_search_by_key(&buffer_id, |buf| buf.get_id());
-        match index {
-            Err(_) => {
-                let msg = format!("buffer with id {} does not exist.", buffer_id);
-                Err(msg.to_string())
-            }
-            Ok(i) => {
-                std::mem::swap(&mut self.active_buffer, &mut self.buffers[i]);
-                Ok(())
-            }
-        }
-    }
-
-    pub fn get_buffer_list(&mut self) -> Vec<(u32, Option<String>)> {
-        self.buffers
-            .iter()
-            .map(|buffer| (buffer.get_id(), None))
-            .collect()
     }
 
     pub fn set_mode(&mut self, new_mode: EditMode) {
