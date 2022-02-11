@@ -1,5 +1,6 @@
 use crate::editor::*;
-use wgpu_glyph::{Text, ab_glyph::PxScale};
+use crate::editor::buffer::BufferEntry;
+use wgpu_glyph::{OwnedText, ab_glyph::PxScale};
 
 // always assume the text buffer starts at 0,0 in the pixel buffer.
 //pub fn draw_cursor<'a>(editor_state: EditorState, window_buffer: &'a [u8], window_size: PhysicalSize<u32>) -> &'a[u8]{
@@ -22,7 +23,7 @@ impl EditorState{
         //let current_line = display_buffer.get_current_line_mut();
         //if current_line.len() == cursor_pos.1 {
         //    current_line.push('\u{2588}');
-        //} else {
+        //} else get_display_buffer{
         //    let byte_pos = current_line.char_indices().skip(cursor_pos.1).next().unwrap().0;
         //    current_line.replace_range(byte_pos..byte_pos, "\u{2588}");
         //}
@@ -30,35 +31,33 @@ impl EditorState{
         display_buffer
     }
 
-    pub fn get_section_text<'a>(&self, display_buffer: &'a Buffer) -> Vec<Text<'a>> {
+    pub fn get_section_text<'a>(&self, display_buffer: &'a Buffer) -> Vec<OwnedText> {
         // now I have a vector with all the strings, and their styles.
         let editor_theme = self.theme.clone();
 
-        let mut v = Vec::new();
+        let mut v: Vec<OwnedText> = Vec::new();
 
-        for line in display_buffer.get_lines() {
-            let t = Text::new(line.as_str())
-                .with_color([1.0,1.0,1.0,1.0])
-                .with_scale(30.0)
-                .with_font_id(wgpu_glyph::FontId(0));
+        let font = editor_theme.get(&Font::Normal).unwrap();
+        let new_text = OwnedText::new(String::new())
+            .with_color(font.color)
+            .with_scale(font.size)
+            .with_font_id(wgpu_glyph::FontId(0));
+        v.push(new_text);
 
-            v.push(t);
-
+        for item in display_buffer.get_lines().into_iter().flatten() {
+            if let BufferEntry::Font(font) = item {
+                let font = editor_theme.get(font).unwrap();
+                let new_text = OwnedText::new(String::new())
+                    .with_color(font.color)
+                    .with_scale(font.size)
+                    .with_font_id(wgpu_glyph::FontId(0));
+                v.push(new_text);
+            }
+            else if let BufferEntry::Text(c) = item {
+                v.last_mut().unwrap().text.push(*c);
+            }
         }
 
         v
-
-        //display_buffer
-            //.get_lines()
-            //.iter()
-            //.fold(Vec::new(), |mut v, line| {
-                //let t = Text::new(line.as_str())
-                    //.with_scale(30.0)
-                    //.with_color([1.0, 1.0, 1.0, 1.0])
-                    //.with_font_id(wgpu_glyph::FontId(0));
-//
-                //v.push(t);
-                //v
-        //})
     }
 }

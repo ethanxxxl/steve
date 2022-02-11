@@ -1,10 +1,18 @@
+use std::char;
+
 use super::fonts::Font;
 
+// when a font is inserted into the buffer, that font will be applied to any text which succeeds it.
 #[derive(Clone)]
-pub struct Token {
-    text: std::ops::Range<usize>,
-    font: Font,
-    tags: Option<Vec<String>>,
+pub enum BufferEntry {
+    Text(char),
+    Font(Font),
+}
+
+impl From<char> for BufferEntry {
+    fn from(c: char) -> Self {
+        BufferEntry::Text(c)
+    }
 }
 
 /// A text buffer with cached metadata.
@@ -34,14 +42,13 @@ pub struct Token {
 #[derive(Clone)]
 pub struct Buffer {
     cursor_pos: (usize, usize),
-
-    lines: Vec<String>
+    lines: Vec<Vec<BufferEntry>>,
 }
 
 impl Buffer {
     pub fn new(id: u32) -> Self {
         Self {
-            lines: vec![String::new()],
+            lines: vec![vec![]],
             cursor_pos: (1, 0),
         }
     }
@@ -53,7 +60,7 @@ impl Buffer {
 
         match c {
             '\n' | '\r' => {
-                self.lines[line_index].insert(column_index, '\n');
+                self.lines[line_index].insert(column_index, '\n'.into());
                 column_index += 1;
 
                 let newline = self.lines[line_index].split_off(column_index);
@@ -79,13 +86,13 @@ impl Buffer {
 
             '\t' => {
                 for _ in 0..3 {
-                    self.lines[line_index].push(' ');
+                    self.lines[line_index].push(' '.into());
                     column_index += 1;
                 }
             }
 
             _ => {
-                self.lines[line_index].insert(column_index, c);
+                self.lines[line_index].insert(column_index, c.into());
                 column_index += 1;
             }
         }
@@ -93,11 +100,11 @@ impl Buffer {
         self.cursor_pos = (line_index+1, column_index);
     }
 
-    pub fn insert_line_above(&mut self, line: String) {
+    pub fn insert_line_above(&mut self, line: Vec<BufferEntry>) {
         self.lines.insert(self.cursor_pos.0-1, line);
         self.cursor_pos.1 += 1;
     }
-    pub fn insert_line_below(&mut self, line: String) {
+    pub fn insert_line_below(&mut self, line: Vec<BufferEntry>) {
         self.lines.insert(self.cursor_pos.0, line);
     }
 
@@ -105,11 +112,11 @@ impl Buffer {
         self.lines[self.cursor_pos.0 - 1].remove(self.cursor_pos.1);
     }
 
-    pub fn get_current_line(&self) -> &String {
+    pub fn get_current_line(&self) -> &Vec<BufferEntry> {
         &self.lines[self.cursor_pos.0 - 1]
     }
 
-    pub fn get_current_line_mut(&mut self) -> &mut String {
+    pub fn get_current_line_mut(&mut self) -> &mut Vec<BufferEntry> {
         &mut self.lines[self.cursor_pos.0 - 1]
     }
 
@@ -117,7 +124,7 @@ impl Buffer {
         self.cursor_pos
     }
 
-    pub fn get_lines(&self) -> &Vec<String> {
+    pub fn get_lines(&self) -> &Vec<Vec<BufferEntry>> {
         &self.lines
     }
 }
