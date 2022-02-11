@@ -27,7 +27,7 @@ impl Default for FontDefinition {
 
             typeface: TypeFace::Monospace,
             color: [1.0, 1.0, 1.0, 1.0],
-            size: 15.0,
+            size: 30.0,
         }
     }
 }
