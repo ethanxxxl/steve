@@ -1,4 +1,4 @@
-use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
+use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Text, Section, OwnedSection, OwnedText};
 use winit::{
     dpi::PhysicalSize,
     event::*,
@@ -7,6 +7,7 @@ use winit::{
 };
 
 use std::rc::Rc;
+use std::borrow::Cow;
 
 use pixels::{PixelsBuilder, SurfaceTexture};
 
@@ -48,9 +49,50 @@ fn main() {
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let PhysicalSize { width, height } = window.inner_size();
 
+    let window = winit::window::WindowBuilder::new()
+        .with_resizable(false)
+        .build(&event_loop)
+        .unwrap();
+
+    let instance = wgpu::Instance::new(wgpu::Backends::all());
+    let surface = unsafe { instance.create_surface(&window) };
+
+    // Initialize GPU
+    let (device, queue) = futures::executor::block_on(async {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("Request adapter");
+
+        adapter
+            .request_device(&wgpu::DeviceDescriptor::default(), None)
+            .await
+            .expect("Request device")
+    });
+
+    // Create staging belt and a local pool
     let mut staging_belt = wgpu::util::StagingBelt::new(1024);
-    let local_pool = futures::executor::LocalPool::new();
+    let mut local_pool = futures::executor::LocalPool::new();
     let local_spawner = local_pool.spawner();
+
+    // Prepare swap chain
+    let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let mut size = window.inner_size();
+
+    surface.configure(
+        &device,
+        &wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: render_format,
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::Mailbox,
+        },
+    );
 
     let surface_texture = SurfaceTexture::new(width, height, &window);
     let mut pixels = PixelsBuilder::new(width, height, surface_texture)
@@ -117,12 +159,15 @@ fn main() {
 
             let display_buffer = editor_state.get_display_buffer();
 
-            glyph_brush.queue(Section {
+            let buffer_section = OwnedSection {
                 screen_position: (0.0, 0.0),
                 bounds: (width as f32, height as f32),
                 text: editor_state.get_section_text(&display_buffer),
                 ..Default::default()
-            });
+            };
+            println!("{:?}", buffer_section.text);
+
+            glyph_brush.queue(buffer_section.to_borrowed());
 
             pixels
                 .render_with(|encoder, render_target, context| {
@@ -140,6 +185,7 @@ fn main() {
                         .expect("Draw queued");
 
                     staging_belt.finish();
+                    Result::Ok(())
                 })
                 .unwrap();
 
