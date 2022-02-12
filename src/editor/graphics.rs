@@ -18,15 +18,14 @@ impl EditorState{
         // other plugins / systems will have a chance to alter the text before it is displayed.
 
         let mut display_buffer = self.active_buffer.clone();
-        // draw the cursor
-        //let cursor_pos = display_buffer.get_cursor_pos();
-        //let current_line = display_buffer.get_current_line_mut();
-        //if current_line.len() == cursor_pos.1 {
-        //    current_line.push('\u{2588}');
-        //} else get_display_buffer{
-        //    let byte_pos = current_line.char_indices().skip(cursor_pos.1).next().unwrap().0;
-        //    current_line.replace_range(byte_pos..byte_pos, "\u{2588}");
-        //}
+        //draw the cursor
+        let cursor_pos = display_buffer.get_cursor_pos();
+        let current_line = display_buffer.get_current_line_mut();
+        if current_line.len() == cursor_pos.1 {
+            current_line.push('\u{2588}'.into());
+        } else {
+            current_line[cursor_pos.1] = '\u{2588}'.into();
+        }
 
         display_buffer
     }

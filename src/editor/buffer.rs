@@ -69,7 +69,7 @@ impl Buffer {
                 line_index += 1;
             }
 
-            '\x08' => {
+            '\x08' | '\x7f' => {
                 if self.lines[line_index].is_empty() && self.lines.len() > 1 {
                     self.lines.remove(line_index);
                     line_index -= 1;
